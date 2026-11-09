@@ -211,11 +211,13 @@ hookState.index = 0
 preset[5] = false
 preset[8] = { url: 'https://example.com/a.png', model: 'm', size: '2K', ratio: '16:9', mode: 'image-to-image' }
 preset[10] = [{ id: 'ref-1', src: 'https://example.com/ref.png' }]
+preset[14] = [{ id: 'h1', url: 'https://example.com/history.png', prompt: '舊圖', model: 'm', size: '1K', ratio: '1:1', mode: 'text-to-image', createdAt: 1700000000000 }]
 const withResult = JSON.stringify(mainEntry.component())
 check('有結果時顯示圖片與 key 欄位', withResult.includes('https://example.com/a.png') && withResult.includes('Agnes API key'))
 check('有參考圖時顯示縮圖與改圖按鈕', withResult.includes('https://example.com/ref.png') && withResult.includes('改圖／合成'))
 check('結果可以「設為參考圖」', withResult.includes('設為參考圖') && withResult.includes('image-to-image'))
 check('面板有上游地址欄位（預設位址當 placeholder）', withResult.includes('上游地址') && withResult.includes('https://apihub.agnes-ai.com'))
+check('歷史紀錄列表會列出過往圖片', withResult.includes('歷史紀錄（1）') && withResult.includes('https://example.com/history.png') && withResult.includes('清除全部'))
 
 const icon = sidebarEntry.component({ size: 18, active: true })
 check('側邊欄圖示渲染 svg', Boolean(icon) && icon.type === 'svg' && icon.props.width === 18 && icon.props.height === 18)

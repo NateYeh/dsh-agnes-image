@@ -21,6 +21,8 @@ window.__ModuleLoader__.load({
 
     const KEY_STORAGE = 'dsh.agnes-image.apiKey'
     const BASE_STORAGE = 'dsh.agnes-image.baseURL'
+    const HISTORY_STORAGE = 'dsh.agnes-image.history'
+    const HISTORY_LIMIT = 40
     const PANEL_ID = 'agnes-image'
     const MAX_IMAGES = 8
     /** 參考圖上傳後縮到這個長邊（px）與 payload 上限，避免 base64 塞爆請求。 */
@@ -94,6 +96,18 @@ window.__ModuleLoader__.load({
       '.agp-link{border:none;background:none;color:var(--dsw-alias-brand-primary);font-size:12px;cursor:pointer;',
       'padding:4px 6px;border-radius:6px;font-family:inherit;text-decoration:none;}',
       '.agp-link:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,transparent);}',
+      '.agp-history{display:flex;flex-direction:column;gap:10px;}',
+      '.agp-hist-head{display:flex;align-items:center;gap:8px;}',
+      '.agp-hist-title{font-size:13px;font-weight:650;color:var(--dsw-alias-label-primary);}',
+      '.agp-hist-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;}',
+      '.agp-hist-item{position:relative;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;overflow:hidden;',
+      'background:var(--dsw-alias-bg-layer-1);}',
+      '.agp-hist-open{display:block;width:100%;padding:0;border:none;background:none;cursor:pointer;font-family:inherit;}',
+      '.agp-hist-open img{width:100%;height:120px;object-fit:cover;display:block;}',
+      '.agp-hist-meta{font-size:10px;color:var(--dsw-alias-label-secondary);padding:4px 6px;}',
+      '.agp-hist-del{position:absolute;top:3px;right:3px;width:20px;height:20px;line-height:1;border-radius:999px;',
+      'border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);',
+      'font-size:12px;cursor:pointer;padding:0;font-family:inherit;}',
     ].join('')
 
     /** 插入樣式表，回傳移除函式（卸載時清掉）。 */
@@ -137,6 +151,36 @@ window.__ModuleLoader__.load({
       } catch (error) {
         console.log('[agnes-image] 無法寫入 localStorage', error)
       }
+    }
+
+    /** 讀本機的生成紀錄（新到舊）；壞資料就當作沒有紀錄。 */
+    function readHistory() {
+      try {
+        const raw = window.localStorage.getItem(HISTORY_STORAGE)
+        if (!raw) return []
+        const parsed = JSON.parse(raw)
+        if (!Array.isArray(parsed)) return []
+        return parsed.filter((item) => item && typeof item.url === 'string' && item.url)
+      } catch (error) {
+        console.log('[agnes-image] 讀取歷史紀錄失敗', error)
+        return []
+      }
+    }
+
+    /** 寫回本機的生成紀錄。 */
+    function writeHistory(entries) {
+      try {
+        window.localStorage.setItem(HISTORY_STORAGE, JSON.stringify(entries))
+      } catch (error) {
+        console.log('[agnes-image] 寫入歷史紀錄失敗', error)
+      }
+    }
+
+    /** 紀錄時間顯示成 MM/DD HH:mm。 */
+    function formatWhen(timestamp) {
+      const date = new Date(timestamp)
+      if (Number.isNaN(date.getTime())) return ''
+      return date.toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     }
 
     /**
@@ -245,6 +289,8 @@ window.__ModuleLoader__.load({
       const baseURL = useState(() => readStored(BASE_STORAGE))
       const setBaseURL = baseURL[1]
       const [defaultBase, setDefaultBase] = useState('')
+      const history = useState(() => readHistory())
+      const setHistory = history[1]
 
       // Host 端是否已備妥 key（config 或環境變數）；失敗就當作沒有，顯示 key 欄位。
       useEffect(() => {
@@ -337,6 +383,19 @@ window.__ModuleLoader__.load({
             throw new Error((data && data.error) || `請求失敗（HTTP ${response.status}）`)
           }
           setResult(data)
+          const entry = {
+            id: `hist-${Date.now()}`,
+            url: String(data.url),
+            prompt: text.slice(0, 300),
+            model: data.model,
+            size: data.size,
+            ratio: data.ratio,
+            mode: data.mode,
+            createdAt: Date.now(),
+          }
+          const nextHistory = [entry, ...history[0].filter((item) => item.url !== entry.url)].slice(0, HISTORY_LIMIT)
+          setHistory(nextHistory)
+          writeHistory(nextHistory)
           if (baseURL[0].trim()) writeStored(BASE_STORAGE, baseURL[0].trim())
           if (apiKey[0].trim()) {
             writeStoredKey(apiKey[0].trim())
@@ -347,7 +406,7 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy(false)
         }
-      }, [prompt, model, size, ratio, apiKey, baseURL, refs, setBusy, setError, setResult, setHostHasKey])
+      }, [prompt, model, size, ratio, apiKey, baseURL, refs, history, setHistory, setBusy, setError, setResult, setHostHasKey])
 
       const copyLink = useCallback(() => {
         if (!result[0] || !result[0].url) return
@@ -371,6 +430,24 @@ window.__ModuleLoader__.load({
         }
         addRef(result[0].url)
       }, [result, refs, addRef, setError])
+
+      /** 點歷史縮圖 → 放回結果區預覽。 */
+      const showHistory = useCallback((entry) => {
+        setResult({ ok: true, url: entry.url, model: entry.model, size: entry.size, ratio: entry.ratio, mode: entry.mode })
+      }, [setResult])
+
+      /** 從紀錄移除一張（只清本機清單）。 */
+      const removeHistory = useCallback((id) => {
+        const next = history[0].filter((item) => item.id !== id)
+        setHistory(next)
+        writeHistory(next)
+      }, [history, setHistory])
+
+      /** 清空紀錄（只清本機清單，不動上游檔案）。 */
+      const clearHistory = useCallback(() => {
+        setHistory([])
+        writeHistory([])
+      }, [setHistory])
 
       const modeHint = refs[0].length > 0
         ? `圖生圖（${refs[0].length} 張參考圖${refs[0].length > 1 ? '，多圖合成' : ''}）：提示詞寫「要改什麼＋要保留什麼」。`
@@ -470,7 +547,29 @@ window.__ModuleLoader__.load({
                     h('button', { className: 'agp-link', onClick: copyLink }, copied ? '已複製' : '複製連結'),
                     h('button', { className: 'agp-link', onClick: reuseAsRef }, '設為參考圖')),
                 ]
-              : h('div', { className: 'agp-empty' }, '生成結果會出現在這裡；「設為參考圖」可以直接接著改圖。'))))
+              : h('div', { className: 'agp-empty' }, '生成結果會出現在這裡；「設為參考圖」可以直接接著改圖。')),
+          h('section', { className: 'agp-history' },
+            h('div', { className: 'agp-hist-head' },
+              h('span', { className: 'agp-hist-title' }, `歷史紀錄（${history[0].length}）`),
+              h('span', { className: 'agp-spacer' }),
+              history[0].length > 0
+                ? h('button', { className: 'agp-link', onClick: clearHistory }, '清除全部')
+                : null),
+            history[0].length === 0
+              ? h('div', { className: 'agp-empty' }, '還沒有生成紀錄；生成過的圖會列在這裡。')
+              : h('div', { className: 'agp-hist-grid' },
+                  history[0].map((item) => h('div', { className: 'agp-hist-item', key: item.id },
+                    h('button', {
+                      className: 'agp-hist-open',
+                      title: item.prompt || '檢視這張圖',
+                      onClick: () => showHistory(item),
+                    }, h('img', { src: item.url, alt: item.prompt || 'Agnes 生成圖片', loading: 'lazy' })),
+                    h('div', { className: 'agp-hist-meta' }, `${item.size} · ${item.ratio} · ${formatWhen(item.createdAt)}`),
+                    h('button', {
+                      className: 'agp-hist-del',
+                      title: '從紀錄移除',
+                      onClick: () => removeHistory(item.id),
+                    }, '×')))))))
     }
 
     return {
