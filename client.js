@@ -607,7 +607,10 @@ window.__ModuleLoader__.load({
                   h('img', { key: 'img', className: 'agp-img', src: result[0].url, alt: prompt[0] || 'Agnes 生成圖片' }),
                   h('div', { key: 'meta', className: 'agp-meta' },
                     `${result[0].model} · ${result[0].size} · ${result[0].ratio} · ${result[0].mode || 'text-to-image'}`),
-                  result[0].path ? h('div', { key: 'path', className: 'agp-path' }, result[0].path) : null,
+                  result[0].path
+                    ? h('div', { key: 'path', className: 'agp-path' }, result[0].path)
+                    : h('div', { key: 'nopath', className: 'agp-note' },
+                        '這次沒有回傳存檔路徑：Host 端可能還是舊版（插件未重新載入），或存檔被跳過。'),
                   result[0].saveError
                     ? h('div', { key: 'saveerr', className: 'agp-err' }, `存檔失敗：${result[0].saveError}`)
                     : null,
