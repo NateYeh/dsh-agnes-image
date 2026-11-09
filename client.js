@@ -84,6 +84,8 @@ window.__ModuleLoader__.load({
       'background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:12px;padding:7px 9px;font-family:inherit;}',
       '.agp-settings{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;}',
       '.agp-settings .agp-key{flex:1;min-width:260px;}',
+      '.agp-key-row{display:flex;gap:6px;align-items:center;}',
+      '.agp-key-row input{flex:1;min-width:0;}',
       '.agp-path{font-size:11px;color:var(--dsw-alias-label-secondary);word-break:break-all;',
       'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}',
       '.agp-err{color:var(--dsw-alias-state-error-primary);font-size:12px;white-space:pre-wrap;}',
@@ -266,7 +268,8 @@ window.__ModuleLoader__.load({
     }
 
     /** 中央面板：提示詞、參考圖、參數、生成、結果。 */
-    function AgnesPanel() {
+    function AgnesPanel(props) {
+      const pickDirectory = props && typeof props.pickDirectory === 'function' ? props.pickDirectory : null
       const prompt = useState('')
       const setPrompt = prompt[1]
       const model = useState(MODELS[0].id)
@@ -432,6 +435,20 @@ window.__ModuleLoader__.load({
         }
       }, [result, setCopied, setError])
 
+      /** 用 DSH 的目錄選擇器挑輸出目錄；沒有選擇器就提示手動輸入。 */
+      const browseOutDir = useCallback(async () => {
+        if (!pickDirectory) {
+          setError('這個環境沒有目錄選擇器，請手動輸入絕對路徑')
+          return
+        }
+        try {
+          const picked = await pickDirectory()
+          if (typeof picked === 'string' && picked) setOutDir(picked)
+        } catch (failure) {
+          setError(String(failure && failure.message ? failure.message : failure))
+        }
+      }, [pickDirectory, setOutDir, setError])
+
       /** 把這次結果丟回參考圖，接著改圖（圖生圖迭代）。 */
       const reuseAsRef = useCallback(() => {
         if (!result[0] || !result[0].url) return
@@ -562,14 +579,16 @@ window.__ModuleLoader__.load({
                   placeholder: defaultBase || 'https://apihub.agnes-ai.com',
                   onChange: (event) => setBaseURL(event.target.value),
                 })),
-              h('label', { className: 'agp-key' },
+              h('div', { className: 'agp-key' },
                 h('span', null, '輸出目錄（絕對路徑；留空用預設）'),
-                h('input', {
-                  type: 'text',
-                  value: outDir[0],
-                  placeholder: defaultOut || '~/Pictures/agnes',
-                  onChange: (event) => setOutDir(event.target.value),
-                })),
+                h('div', { className: 'agp-key-row' },
+                  h('input', {
+                    type: 'text',
+                    value: outDir[0],
+                    placeholder: defaultOut || '~/Pictures/agnes',
+                    onChange: (event) => setOutDir(event.target.value),
+                  }),
+                  h('button', { type: 'button', className: 'agp-btn', onClick: browseOutDir }, '瀏覽…'))),
               hostHasKey === false
                 ? h('label', { className: 'agp-key' },
                     h('span', null, 'Agnes API key（只存在這台瀏覽器；Host 僅在記憶體中使用）'),
@@ -631,8 +650,13 @@ window.__ModuleLoader__.load({
         const slots = typeof ctx.get === 'function' ? ctx.get('slots') : undefined
         if (!slots) return
         ctx.effect(() => ensureCss(), 'agnes-image: styles')
+        const workspace = typeof ctx.get === 'function' ? ctx.get('uiWorkspace') : undefined
+        const pickDirectory = workspace && typeof workspace.pickDirectory === 'function'
+          ? () => workspace.pickDirectory()
+          : null
+        const Panel = (props) => h(AgnesPanel, { ...props, pickDirectory })
         const disposers = [
-          slots.inject('main', () => slots.register({ name: 'main', key: PANEL_ID }, AgnesPanel)),
+          slots.inject('main', () => slots.register({ name: 'main', key: PANEL_ID }, Panel)),
           slots.inject('sidebar.panellist', () => slots.register({
             name: 'sidebar.panellist',
             id: PANEL_ID,

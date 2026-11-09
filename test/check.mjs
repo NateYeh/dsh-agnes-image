@@ -220,8 +220,13 @@ const sidebarEntry = registrations.find((entry) => entry.options.name === 'sideb
 check('註冊 main 面板（key=agnes-image）', Boolean(mainEntry) && mainEntry.options.key === 'agnes-image')
 check('註冊 sidebar 清單圖示（id=agnes-image）', Boolean(sidebarEntry) && sidebarEntry.options.id === 'agnes-image' && sidebarEntry.options.label() === 'Agnes 生圖')
 
+// main 註冊的是包裝元件（傳入目錄選擇器），實際面板在它的 props.type 裡。
+const mainWrapper = mainEntry.component({})
+const PanelComponent = mainWrapper.type
+const renderPanel = () => PanelComponent(mainWrapper.props)
+
 hookState.index = 0
-const emptyState = JSON.stringify(mainEntry.component())
+const emptyState = JSON.stringify(renderPanel())
 check('面板空狀態', emptyState.includes('Agnes 生圖') && emptyState.includes('生成結果會出現在這裡'))
 check('面板有提示詞輸入與生成按鈕', emptyState.includes('描述你要的圖片') && emptyState.includes('生成'))
 
@@ -231,7 +236,7 @@ preset[8] = { url: 'https://example.com/a.png', path: 'C:/tmp/agnes/a.png', mode
 preset[10] = [{ id: 'ref-1', src: 'https://example.com/ref.png' }]
 preset[14] = [{ id: 'h1', url: 'https://example.com/history.png', prompt: '舊圖', model: 'm', size: '1K', ratio: '1:1', mode: 'text-to-image', createdAt: 1700000000000 }]
 preset[15] = 'D:/pics/agnes'
-const withResult = JSON.stringify(mainEntry.component())
+const withResult = JSON.stringify(renderPanel())
 check('有結果時顯示圖片與 key 欄位', withResult.includes('https://example.com/a.png') && withResult.includes('Agnes API key'))
 check('有參考圖時顯示縮圖與改圖按鈕', withResult.includes('https://example.com/ref.png') && withResult.includes('改圖／合成'))
 check('結果可以「設為參考圖」', withResult.includes('設為參考圖') && withResult.includes('image-to-image'))
@@ -239,6 +244,7 @@ check('面板有上游地址欄位（預設位址當 placeholder）', withResult
 check('歷史紀錄列表會列出過往圖片', withResult.includes('歷史紀錄（1）') && withResult.includes('https://example.com/history.png') && withResult.includes('清除全部'))
 check('結果會顯示存檔路徑與「開啟資料夾」', withResult.includes('C:/tmp/agnes/a.png') && withResult.includes('開啟資料夾'))
 check('面板有輸出目錄欄位', withResult.includes('輸出目錄') && withResult.includes('D:/pics/agnes'))
+check('輸出目錄有「瀏覽…」選擇器', withResult.includes('瀏覽…'))
 const icon = sidebarEntry.component({ size: 18, active: true })
 check('側邊欄圖示渲染 svg', Boolean(icon) && icon.type === 'svg' && icon.props.width === 18 && icon.props.height === 18)
 
