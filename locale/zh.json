@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Agnes 生圖",
+    "description": "用 Agnes AI 圖片 API 依提示詞生圖：左側清單有「Agnes 生圖」面板，Agent 也能呼叫 agnes_generate_image 工具。"
+  }
+}

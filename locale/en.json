@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Agnes image generation",
+    "description": "Generate images from a prompt through the Agnes AI image API, from the Agnes image panel in the left sidebar or through the agnes_generate_image agent tool."
+  }
+}

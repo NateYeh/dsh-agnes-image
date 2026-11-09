@@ -1,0 +1,18 @@
+# Agnes AI 生圖插件（Host + Web Client）。
+#
+# install_bundle 會把這個 patch 併進 profile 的 plugin tree；使用者可在 profile 的
+# cordis.patch.yml 用同一個 id（agnes-image）覆寫 config 而不用改這個檔案。
+#
+# config 欄位：
+#   baseURL   Agnes API 根路徑（預設 https://apihub.agnes-ai.com）
+#   model     預設模型（agnes-image-2.5-flash / agnes-image-2.1-flash）
+#   apiKey    API key（留空則讀 AGNES_API_KEY 環境變數；面板輸入的 key 優先用於該次請求）
+#   timeoutMs 單次生成等待上限（預設 240000；官方建議 60s–360s）
+- insert:
+    - id: agnes-image
+      name: '@local/agnes-image'
+      config:
+        baseURL: https://apihub.agnes-ai.com
+        model: agnes-image-2.5-flash
+        apiKey: ''
+        timeoutMs: 240000
