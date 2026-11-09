@@ -7,6 +7,7 @@
 #   baseURL   Agnes API 根路徑（預設 https://apihub.agnes-ai.com）
 #   model     預設模型（agnes-image-2.5-flash / agnes-image-2.1-flash）
 #   apiKey    API key（留空則讀 AGNES_API_KEY 環境變數；面板輸入的 key 優先用於該次請求）
+#   outDir    生成圖片的輸出目錄（絕對路徑；留空用 ~/Pictures/agnes；面板設定優先）
 #   timeoutMs 單次生成等待上限（預設 240000；官方建議 60s–360s）
 - insert:
     - id: agnes-image
@@ -15,4 +16,5 @@
         baseURL: https://apihub.agnes-ai.com
         model: agnes-image-2.5-flash
         apiKey: ''
+        outDir: ''
         timeoutMs: 240000

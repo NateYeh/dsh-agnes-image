@@ -18,6 +18,11 @@
  * @module @local/agnes-image
  */
 
+import { spawn } from 'node:child_process'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { isAbsolute, join, relative, resolve } from 'node:path'
+
 /** tools 是硬依賴：沒有它就沒有工具可註冊（屬性存取需要 inject 才會接上）。 */
 export const inject = ['tools']
 
@@ -43,13 +48,21 @@ const IMAGE_DATA_RE = /^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=\r\n
 /** 請求內容上限：參考圖 base64 會撐大 body。 */
 const MAX_BODY_BYTES = 32 * 1024 * 1024
 
-/** 讀 config 並套預設值；config 來自 bundle patch 或 profile 覆寫。 */function resolveConfig(config) {
+/** 生成圖片的預設輸出目錄（可在面板或 config 改）。 */
+const DEFAULT_OUT_DIR = join(homedir(), 'Pictures', 'agnes')
+
+/** 下載回來的圖片大小上限。 */
+const MAX_IMAGE_BYTES = 64 * 1024 * 1024
+
+/** 讀 config 並套預設值；config 來自 bundle patch 或 profile 覆寫。 */
+function resolveConfig(config) {
   const raw = config && typeof config === 'object' ? config : {}
   const timeout = Number(raw.timeoutMs)
   return {
     baseURL: String(raw.baseURL || DEFAULT_BASE_URL).replace(/\/+$/, ''),
     model: MODELS.includes(raw.model) ? raw.model : DEFAULT_MODEL,
     apiKey: typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '',
+    outDir: typeof raw.outDir === 'string' ? raw.outDir.trim() : '',
     timeoutMs: Number.isFinite(timeout) && timeout > 0 ? Math.min(timeout, MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS,
   }
 }
@@ -67,6 +80,68 @@ let panelKey = ''
 
 /** 面板填過、只留在 Host 記憶體的上游地址（重啟即消失）。 */
 let panelBaseURL = ''
+
+/** 面板填過、只留在 Host 記憶體的輸出目錄（重啟即消失）。 */
+let panelOutDir = ''
+
+/**
+ * 解析輸出目錄：面板值 ＞ config ＞ 預設；`~` 展開成家目錄，必須是絕對路徑。
+ * @param {unknown} candidate 這次請求帶的目錄。
+ * @param {string} fallback config 的目錄。
+ * @returns {string} 絕對路徑。
+ */
+function resolveOutDir(candidate, fallback) {
+  const value = typeof candidate === 'string' ? candidate.trim() : ''
+  const raw = value || fallback || DEFAULT_OUT_DIR
+  const expanded = raw === '~' ? homedir() : raw.startsWith('~/') || raw.startsWith('~\\') ? join(homedir(), raw.slice(2)) : raw
+  if (!isAbsolute(expanded)) throw new Error(`輸出目錄必須是絕對路徑：${raw}`)
+  return expanded
+}
+
+/**
+ * 把圖片位元組存成 PNG；目錄不存在就建立，檔名帶時間戳。
+ * @param {Buffer} bytes 圖片內容。
+ * @param {string} outDir 輸出目錄（絕對路徑）。
+ * @returns {{ file: string, bytes: number }} 存檔路徑與大小。
+ */
+function saveImageFile(bytes, outDir) {
+  mkdirSync(outDir, { recursive: true })
+  const now = new Date()
+  const pad = (value) => String(value).padStart(2, '0')
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  const suffix = Math.random().toString(36).slice(2, 8)
+  const file = join(outDir, `agnes-${stamp}-${suffix}.png`)
+  writeFileSync(file, bytes)
+  return { file, bytes: bytes.length }
+}
+
+/**
+ * 取回上游圖片位元組：支援 http(s) URL 與 data: base64。
+ * @param {string} url 上游回傳的圖片位置。
+ * @param {number} timeoutMs 下載逾時上限。
+ * @returns {Promise<Buffer>} 圖片內容。
+ */
+async function fetchImageBytes(url, timeoutMs) {
+  if (url.startsWith('data:')) {
+    const comma = url.indexOf(',')
+    if (comma < 0 || !/;base64/i.test(url.slice(5, comma))) throw new Error('data URI 格式不支援（只收 base64）')
+    return Buffer.from(url.slice(comma + 1), 'base64')
+  }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), Math.min(timeoutMs, 120000))
+  try {
+    const response = await fetch(url, { signal: controller.signal })
+    if (!response.ok) throw new Error(`下載圖片失敗：HTTP ${response.status}`)
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.length > MAX_IMAGE_BYTES) throw new Error(`圖片過大（${buffer.length} bytes）`)
+    return buffer
+  } catch (error) {
+    if (error && error.name === 'AbortError') throw new Error('下載圖片逾時')
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 /**
  * 正規化上游地址：只收 http(s)、去掉尾斜線、拒絕帳密。
@@ -146,6 +221,9 @@ async function generateImage(cfg, input) {
   const size = pick(request.size, SIZES, '1K')
   const ratio = pick(request.ratio, RATIOS, '1:1')
   const images = normalizeImages(request.images === undefined ? request.image : request.images)
+  // 先驗證輸出目錄，壞路徑要在打 API 之前就回報（不要白花一次生成）。
+  const outDir = resolveOutDir(request.outputDir ?? request.outDir, cfg.outDir)
+  if (typeof request.outputDir === 'string' && request.outputDir.trim()) panelOutDir = outDir
   // response_format 只能放 extra_body；有參考圖時 image 也放 extra_body。
   const extraBody = { response_format: 'url' }
   if (images.length > 0) extraBody.image = images
@@ -183,8 +261,26 @@ async function generateImage(cfg, input) {
     if (!item) throw new Error('Agnes API 回應缺少 data[0]')
     const url = typeof item.url === 'string' && item.url ? item.url : item.b64_json ? `data:image/png;base64,${item.b64_json}` : ''
     if (!url) throw new Error('Agnes API 既沒有回傳 url 也沒有 b64_json')
+
+    // 存檔失敗不算生成失敗：URL 仍然是有效結果，只是把原因回報給呼叫端。
+    let savedPath = ''
+    let savedBytes = 0
+    let saveError = ''
+    try {
+      const bytes = await fetchImageBytes(url, cfg.timeoutMs)
+      const saved = saveImageFile(bytes, outDir)
+      savedPath = saved.file
+      savedBytes = saved.bytes
+    } catch (error) {
+      saveError = String(error && error.message ? error.message : error)
+    }
+
     return {
       url,
+      path: savedPath,
+      bytes: savedBytes,
+      outDir,
+      saveError,
       model,
       size,
       ratio,
@@ -212,7 +308,7 @@ function registerEffect(ctx, factory, label) {
 function registerTool(ctx, tools, cfg) {
   const definition = {
     name: 'agnes_generate_image',
-    description: '使用 Agnes AI 生成或改圖（agnes-image-2.5-flash）：給文字提示就文生圖，附參考圖就圖生圖／多圖合成，回傳可公開存取的圖片 URL。',
+    description: '使用 Agnes AI 生成或改圖（agnes-image-2.5-flash）：給文字提示就文生圖，附參考圖就圖生圖／多圖合成；圖片存成 PNG 到輸出目錄並回傳 URL 與檔案路徑。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -229,6 +325,10 @@ function registerTool(ctx, tools, cfg) {
           type: 'string',
           description: '選填：自訂上游地址（OpenAI 相容 gateway，可含 /v1）。留空則用插件設定的預設（https://apihub.agnes-ai.com）。',
         },
+        outDir: {
+          type: 'string',
+          description: '選填：輸出目錄（絕對路徑）。留空則用面板設定或預設（~/Pictures/agnes）。圖會存成 PNG 並回傳路徑。',
+        },
       },
       required: ['prompt'],
     },
@@ -238,20 +338,37 @@ function registerTool(ctx, tools, cfg) {
         additionalProperties: false,
         properties: {
           url: { type: 'string' },
+          path: { type: 'string', description: '存檔的絕對路徑；存檔失敗時為空字串' },
+          bytes: { type: 'integer' },
+          outDir: { type: 'string' },
+          saveError: { type: 'string' },
           model: { type: 'string' },
           size: { type: 'string' },
           ratio: { type: 'string' },
         },
-        required: ['url'],
+        required: ['url', 'path', 'bytes', 'outDir', 'saveError'],
       },
-      render: (_args, value) => [
-        { type: 'text', text: `圖片已生成（${value.model} ${value.size} ${value.ratio}）：\n${value.url}` },
-      ],
+      render: (_args, value) => {
+        const lines = [`圖片已生成（${value.model} ${value.size} ${value.ratio}）：\n${value.url}`]
+        if (value.path) lines.push(`已存到：${value.path}`)
+        if (value.saveError) lines.push(`存檔失敗：${value.saveError}`)
+        return [{ type: 'text', text: lines.join('\n') }]
+      },
     },
     timeoutMs: cfg.timeoutMs + 15000,
     async execute(args) {
       const result = await generateImage(cfg, args)
-      return { url: result.url, model: result.model, size: result.size, ratio: result.ratio, mode: result.mode }
+      return {
+        url: result.url,
+        path: result.path,
+        bytes: result.bytes,
+        outDir: result.outDir,
+        saveError: result.saveError,
+        model: result.model,
+        size: result.size,
+        ratio: result.ratio,
+        mode: result.mode,
+      }
     },
   }
   registerEffect(ctx, () => tools.register(definition), 'agnes-image: agnes_generate_image')
@@ -338,12 +455,20 @@ function registerRoutes(ctx, webServer, cfg) {
     path: `${ROUTE_PREFIX}/status`,
     handler: guard((req, res) => {
       if (req.method !== 'GET') return send(res, 405, { ok: false, error: 'method not allowed' })
+      let defaultOutDir = DEFAULT_OUT_DIR
+      try {
+        defaultOutDir = resolveOutDir('', cfg.outDir)
+      } catch {
+        defaultOutDir = cfg.outDir || DEFAULT_OUT_DIR
+      }
       return send(res, 200, {
         ok: true,
         hasKey: Boolean(configuredKey(cfg) || panelKey),
         model: cfg.model,
         baseURL: panelBaseURL || cfg.baseURL,
         defaultBaseURL: cfg.baseURL,
+        outDir: panelOutDir || defaultOutDir,
+        defaultOutDir,
       })
     }),
   }), 'agnes-image: status route')
@@ -372,6 +497,35 @@ function registerRoutes(ctx, webServer, cfg) {
       }
     }),
   }), 'agnes-image: generate route')
+
+  // 在檔案總管打開輸出目錄或選取剛存的圖；只接受輸出目錄內的路徑。
+  registerEffect(ctx, () => webServer.register({
+    kind: 'exact',
+    path: `${ROUTE_PREFIX}/reveal`,
+    handler: guard(async (req, res) => {
+      if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'method not allowed' })
+      const parsed = await readJsonBody(req)
+      const target = String((parsed.value && parsed.value.path) || '').trim()
+      let root
+      try {
+        root = resolveOutDir('', panelOutDir || cfg.outDir)
+      } catch (error) {
+        return send(res, 400, { ok: false, error: String(error && error.message ? error.message : error) })
+      }
+      const absolute = target ? resolve(target) : root
+      const rel = relative(root, absolute)
+      if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) {
+        return send(res, 403, { ok: false, error: '路徑不在輸出目錄內' })
+      }
+      try {
+        const args = absolute === root ? [root] : [`/select,${absolute}`]
+        spawn('explorer.exe', args, { detached: true, stdio: 'ignore' }).unref()
+      } catch (error) {
+        return send(res, 500, { ok: false, error: String(error && error.message ? error.message : error) })
+      }
+      return send(res, 200, { ok: true, path: absolute })
+    }),
+  }), 'agnes-image: reveal route')
 }
 
 /**

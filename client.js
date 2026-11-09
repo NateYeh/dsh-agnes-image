@@ -21,6 +21,7 @@ window.__ModuleLoader__.load({
 
     const KEY_STORAGE = 'dsh.agnes-image.apiKey'
     const BASE_STORAGE = 'dsh.agnes-image.baseURL'
+    const OUT_STORAGE = 'dsh.agnes-image.outDir'
     const HISTORY_STORAGE = 'dsh.agnes-image.history'
     const HISTORY_LIMIT = 40
     const PANEL_ID = 'agnes-image'
@@ -83,6 +84,8 @@ window.__ModuleLoader__.load({
       'background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:12px;padding:7px 9px;font-family:inherit;}',
       '.agp-settings{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;}',
       '.agp-settings .agp-key{flex:1;min-width:260px;}',
+      '.agp-path{font-size:11px;color:var(--dsw-alias-label-secondary);word-break:break-all;',
+      'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}',
       '.agp-err{color:var(--dsw-alias-state-error-primary);font-size:12px;white-space:pre-wrap;}',
       '.agp-note{font-size:11px;color:var(--dsw-alias-label-secondary);}',
       '.agp-result{border:1px dashed var(--dsw-alias-border-l1);border-radius:12px;padding:16px;display:flex;',
@@ -291,6 +294,9 @@ window.__ModuleLoader__.load({
       const [defaultBase, setDefaultBase] = useState('')
       const history = useState(() => readHistory())
       const setHistory = history[1]
+      const outDir = useState(() => readStored(OUT_STORAGE))
+      const setOutDir = outDir[1]
+      const [defaultOut, setDefaultOut] = useState('')
 
       // Host 端是否已備妥 key（config 或環境變數）；失敗就當作沒有，顯示 key 欄位。
       useEffect(() => {
@@ -302,6 +308,8 @@ window.__ModuleLoader__.load({
             setHostHasKey(Boolean(data.hasKey))
             if (typeof data.defaultBaseURL === 'string') setDefaultBase(data.defaultBaseURL)
             if (typeof data.baseURL === 'string') setBaseURL((current) => current || data.baseURL)
+            if (typeof data.defaultOutDir === 'string') setDefaultOut(data.defaultOutDir)
+            if (typeof data.outDir === 'string') setOutDir((current) => current || data.outDir)
           })
           .catch(() => {
             if (alive) setHostHasKey(false)
@@ -375,6 +383,7 @@ window.__ModuleLoader__.load({
               ratio: ratio[0],
               apiKey: apiKey[0].trim(),
               baseURL: baseURL[0].trim(),
+              outputDir: outDir[0].trim(),
               images: refs[0].map((item) => item.src),
             }),
           })
@@ -391,11 +400,13 @@ window.__ModuleLoader__.load({
             size: data.size,
             ratio: data.ratio,
             mode: data.mode,
+            path: typeof data.path === 'string' ? data.path : '',
             createdAt: Date.now(),
           }
           const nextHistory = [entry, ...history[0].filter((item) => item.url !== entry.url)].slice(0, HISTORY_LIMIT)
           setHistory(nextHistory)
           writeHistory(nextHistory)
+          if (outDir[0].trim()) writeStored(OUT_STORAGE, outDir[0].trim())
           if (baseURL[0].trim()) writeStored(BASE_STORAGE, baseURL[0].trim())
           if (apiKey[0].trim()) {
             writeStoredKey(apiKey[0].trim())
@@ -406,7 +417,7 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy(false)
         }
-      }, [prompt, model, size, ratio, apiKey, baseURL, refs, history, setHistory, setBusy, setError, setResult, setHostHasKey])
+      }, [prompt, model, size, ratio, apiKey, baseURL, outDir, refs, history, setHistory, setBusy, setError, setResult, setHostHasKey])
 
       const copyLink = useCallback(() => {
         if (!result[0] || !result[0].url) return
@@ -433,7 +444,15 @@ window.__ModuleLoader__.load({
 
       /** 點歷史縮圖 → 放回結果區預覽。 */
       const showHistory = useCallback((entry) => {
-        setResult({ ok: true, url: entry.url, model: entry.model, size: entry.size, ratio: entry.ratio, mode: entry.mode })
+        setResult({
+          ok: true,
+          url: entry.url,
+          path: entry.path || '',
+          model: entry.model,
+          size: entry.size,
+          ratio: entry.ratio,
+          mode: entry.mode,
+        })
       }, [setResult])
 
       /** 從紀錄移除一張（只清本機清單）。 */
@@ -448,6 +467,25 @@ window.__ModuleLoader__.load({
         setHistory([])
         writeHistory([])
       }, [setHistory])
+
+      /** 在檔案總管打開輸出目錄（並選取這張圖）。 */
+      const revealPath = useCallback(async () => {
+        if (!result[0]) return
+        try {
+          const response = await fetch('/local/agnes-image/reveal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ path: result[0].path || '' }),
+          })
+          const data = await response.json().catch(() => null)
+          if (!response.ok || !data || data.ok === false) {
+            throw new Error((data && data.error) || `開啟失敗（HTTP ${response.status}）`)
+          }
+        } catch (failure) {
+          setError(String(failure && failure.message ? failure.message : failure))
+        }
+      }, [result, setError])
 
       const modeHint = refs[0].length > 0
         ? `圖生圖（${refs[0].length} 張參考圖${refs[0].length > 1 ? '，多圖合成' : ''}）：提示詞寫「要改什麼＋要保留什麼」。`
@@ -524,6 +562,14 @@ window.__ModuleLoader__.load({
                   placeholder: defaultBase || 'https://apihub.agnes-ai.com',
                   onChange: (event) => setBaseURL(event.target.value),
                 })),
+              h('label', { className: 'agp-key' },
+                h('span', null, '輸出目錄（絕對路徑；留空用預設）'),
+                h('input', {
+                  type: 'text',
+                  value: outDir[0],
+                  placeholder: defaultOut || '~/Pictures/agnes',
+                  onChange: (event) => setOutDir(event.target.value),
+                })),
               hostHasKey === false
                 ? h('label', { className: 'agp-key' },
                     h('span', null, 'Agnes API key（只存在這台瀏覽器；Host 僅在記憶體中使用）'),
@@ -542,9 +588,16 @@ window.__ModuleLoader__.load({
                   h('img', { key: 'img', className: 'agp-img', src: result[0].url, alt: prompt[0] || 'Agnes 生成圖片' }),
                   h('div', { key: 'meta', className: 'agp-meta' },
                     `${result[0].model} · ${result[0].size} · ${result[0].ratio} · ${result[0].mode || 'text-to-image'}`),
+                  result[0].path ? h('div', { key: 'path', className: 'agp-path' }, result[0].path) : null,
+                  result[0].saveError
+                    ? h('div', { key: 'saveerr', className: 'agp-err' }, `存檔失敗：${result[0].saveError}`)
+                    : null,
                   h('div', { key: 'act', className: 'agp-actions' },
                     h('a', { className: 'agp-link', href: result[0].url, target: '_blank', rel: 'noreferrer' }, '開啟原圖'),
                     h('button', { className: 'agp-link', onClick: copyLink }, copied ? '已複製' : '複製連結'),
+                    result[0].path
+                      ? h('button', { className: 'agp-link', onClick: revealPath }, '開啟資料夾')
+                      : null,
                     h('button', { className: 'agp-link', onClick: reuseAsRef }, '設為參考圖')),
                 ]
               : h('div', { className: 'agp-empty' }, '生成結果會出現在這裡；「設為參考圖」可以直接接著改圖。')),
